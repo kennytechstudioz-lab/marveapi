@@ -207,6 +207,18 @@ export const updateProfile = asyncHandler(async (req: any, res: Response, next: 
         phone: req.body.phone,
     };
     if (req.body.accountType) fieldsToUpdate.accountType = req.body.accountType;
+    if (req.body.merchantType !== undefined) fieldsToUpdate.merchantType = req.body.merchantType;
+    if (req.body.agentSpecialization !== undefined) fieldsToUpdate.agentSpecialization = req.body.agentSpecialization;
+    if (req.body.isBusinessRegistered !== undefined) fieldsToUpdate.isBusinessRegistered = req.body.isBusinessRegistered;
+    if (req.body.businessName !== undefined) fieldsToUpdate.businessName = req.body.businessName;
+    if (req.body.officeAddress !== undefined) fieldsToUpdate.officeAddress = req.body.officeAddress;
+    if (req.body.cacDocument !== undefined) fieldsToUpdate.cacDocument = req.body.cacDocument;
+    if (req.body.bankName !== undefined) fieldsToUpdate.bankName = req.body.bankName;
+    if (req.body.accountName !== undefined) fieldsToUpdate.accountName = req.body.accountName;
+    if (req.body.accountNumber !== undefined) fieldsToUpdate.accountNumber = req.body.accountNumber;
+    if (req.body.coverageCountry !== undefined) fieldsToUpdate.coverageCountry = req.body.coverageCountry;
+    if (req.body.coverageState !== undefined) fieldsToUpdate.coverageState = req.body.coverageState;
+    if (req.body.coverageArea !== undefined) fieldsToUpdate.coverageArea = req.body.coverageArea;
     if (req.body.bio !== undefined) fieldsToUpdate.bio = req.body.bio;
     if (req.body.website !== undefined) fieldsToUpdate.website = req.body.website;
 

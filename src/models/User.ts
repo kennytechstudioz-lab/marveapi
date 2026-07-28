@@ -18,7 +18,19 @@ export interface IUser extends Document {
     bio?: string;
     website?: string;
     role: 'user' | 'admin' | 'staff';
-    accountType?: 'User' | 'Agent';
+    accountType?: 'User' | 'Agent' | 'Merchant';
+    merchantType?: 'Designers' | 'Materials' | 'Furniture';
+    agentSpecialization?: 'House' | 'Lands' | 'Both';
+    isBusinessRegistered?: boolean;
+    businessName?: string;
+    officeAddress?: string;
+    cacDocument?: string;
+    bankName?: string;
+    accountName?: string;
+    accountNumber?: string;
+    coverageCountry?: string;
+    coverageState?: string;
+    coverageArea?: string;
     phone?: string;
     firstName: string;
     middleName?: string;
@@ -75,9 +87,30 @@ const userSchema: Schema = new Schema({
     },
     accountType: {
         type: String,
-        enum: ['User', 'Agent'],
+        enum: ['User', 'Agent', 'Merchant'],
         default: 'User'
     },
+    merchantType: {
+        type: String,
+        enum: ['Designers', 'Materials', 'Furniture'],
+    },
+    agentSpecialization: {
+        type: String,
+        enum: ['House', 'Lands', 'Both'],
+    },
+    isBusinessRegistered: {
+        type: Boolean,
+        default: false
+    },
+    businessName: String,
+    officeAddress: String,
+    cacDocument: String,
+    bankName: String,
+    accountName: String,
+    accountNumber: String,
+    coverageCountry: String,
+    coverageState: String,
+    coverageArea: String,
     phone: String,
     firstName: {
         type: String,
