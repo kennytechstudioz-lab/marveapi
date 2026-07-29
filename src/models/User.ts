@@ -20,9 +20,15 @@ export interface IUser extends Document {
     role: 'user' | 'admin' | 'staff';
     accountType?: 'User' | 'Agent' | 'Merchant';
     merchantType?: 'Designers' | 'Materials' | 'Furniture';
+    merchantSubCategories?: string[];
     agentSpecialization?: 'House' | 'Lands' | 'Both';
     isBusinessRegistered?: boolean;
+    isBusinessVerifying?: boolean;
+    isBusinessVerified?: boolean;
+    rejectionReason?: string;
     businessName?: string;
+    businessEmail?: string;
+    businessBanner?: string;
     officeAddress?: string;
     cacDocument?: string;
     bankName?: string;
@@ -31,6 +37,7 @@ export interface IUser extends Document {
     coverageCountry?: string;
     coverageState?: string;
     coverageArea?: string;
+    coverageType?: string;
     phone?: string;
     firstName: string;
     middleName?: string;
@@ -94,6 +101,7 @@ const userSchema: Schema = new Schema({
         type: String,
         enum: ['Designers', 'Materials', 'Furniture'],
     },
+    merchantSubCategories: [String],
     agentSpecialization: {
         type: String,
         enum: ['House', 'Lands', 'Both'],
@@ -102,7 +110,18 @@ const userSchema: Schema = new Schema({
         type: Boolean,
         default: false
     },
+    isBusinessVerifying: {
+        type: Boolean,
+        default: false
+    },
+    isBusinessVerified: {
+        type: Boolean,
+        default: false
+    },
+    rejectionReason: String,
     businessName: String,
+    businessEmail: String,
+    businessBanner: String,
     officeAddress: String,
     cacDocument: String,
     bankName: String,
@@ -111,6 +130,7 @@ const userSchema: Schema = new Schema({
     coverageCountry: String,
     coverageState: String,
     coverageArea: String,
+    coverageType: String,
     phone: String,
     firstName: {
         type: String,
@@ -129,7 +149,7 @@ const userSchema: Schema = new Schema({
         type: String,
         required: [true, 'Password is required'],
         minlength: [6, 'Password must be at least 6 characters'],
-        select: false // Don't return password by default
+        select: false
     }
 }, {
     timestamps: true

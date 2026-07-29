@@ -35,7 +35,7 @@ export const createMaterial = asyncHandler(async (req: any, res: Response, next:
     req.body.userId = req.user.id;
     req.body.username = req.user.username;
     const fullName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim();
-    req.body.vendorName = fullName || req.user.username;
+    req.body.vendorName = req.user.businessName || fullName || req.user.username;
 
     const material = await Material.create(req.body);
 
@@ -62,7 +62,7 @@ export const updateMaterial = asyncHandler(async (req: any, res: Response, next:
 
     if (req.body.vendorName) {
         const fullName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim();
-        req.body.vendorName = fullName || req.user.username;
+        req.body.vendorName = req.user.businessName || fullName || req.user.username;
     }
 
     material = await Material.findByIdAndUpdate(req.params.id, req.body, {

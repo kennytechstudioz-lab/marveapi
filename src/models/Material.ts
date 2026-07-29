@@ -4,6 +4,7 @@ export interface IMaterial extends Document {
     name: string;
     price: number;
     image?: string;
+    images?: string[];
     video?: string;
     vendorName: string;
     country?: string;
@@ -31,6 +32,10 @@ const materialSchema: Schema = new Schema({
     },
     image: {
         type: String
+    },
+    images: {
+        type: [String],
+        default: []
     },
     video: {
         type: String

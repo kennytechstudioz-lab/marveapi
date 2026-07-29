@@ -1,10 +1,11 @@
+import http from 'http';
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 // Load env vars
 dotenv.config();
 
 process.on('uncaughtException', (err) => {
-    console.error('UNCAUGHT EXCEPTION! Γ£û Shutting down...');
+    console.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
     console.error(err.name, err.message);
     console.error(err.stack);
     process.exit(1);
@@ -16,6 +17,8 @@ import errorHandler from './src/middleware/error';
 import userRoutes from './src/routes/userRoutes';
 import placeRoutes from './src/routes/placeRoutes';
 import templateRoutes from './src/routes/templateRoutes';
+import notificationTemplateRoutes from './src/routes/notificationTemplateRoutes';
+import termRoutes from './src/routes/termRoutes';
 import listingRoutes from './src/routes/listingRoutes';
 import auctionRoutes from './src/routes/auctionRoutes';
 import policyRoutes from './src/routes/policyRoutes';
@@ -23,9 +26,12 @@ import bookmarkRoutes from './src/routes/bookmarkRoutes';
 import materialRoutes from './src/routes/materialRoutes';
 import uploadRoutes from './src/routes/uploadRoutes';
 import cartRoutes from './src/routes/cartRoutes';
+import notificationRoutes from './src/routes/notificationRoutes';
+import { initSocket } from './src/utils/socket';
+import { seedTerms } from './src/utils/termSeeder';
 
 // Connect to database
-connectDB();
+connectDB().then(() => seedTerms());
 
 const app = express();
 
@@ -45,6 +51,8 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/places', placeRoutes);
 app.use('/api/v1/templates', templateRoutes);
+app.use('/api/v1/notification-templates', notificationTemplateRoutes);
+app.use('/api/v1/terms', termRoutes);
 app.use('/api/v1/listings', listingRoutes);
 app.use('/api/v1/auctions', auctionRoutes);
 app.use('/api/v1/policies', policyRoutes);
@@ -52,6 +60,7 @@ app.use('/api/v1/bookmarks', bookmarkRoutes);
 app.use('/api/v1/materials', materialRoutes);
 app.use('/api/v1/upload', uploadRoutes);
 app.use('/api/v1/cart', cartRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
 
 app.get('/', (req: Request, res: Response) => {
     res.send('API is running in TypeScript...');
@@ -62,12 +71,16 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
-const server = app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+// HTTP Server & Socket.IO initialization
+const httpServer = http.createServer(app);
+initSocket(httpServer);
+
+const server = httpServer.listen(PORT, () => {
+    console.log(`🚀 Server running with Socket.io on port ${PORT}`);
 });
 
 process.on('unhandledRejection', (err: any) => {
-    console.error('UNHANDLED REJECTION! Γ£û Shutting down...');
+    console.error('UNHANDLED REJECTION! 💥 Shutting down...');
     console.error(err.name, err.message);
     console.error(err.stack);
     server.close(() => {

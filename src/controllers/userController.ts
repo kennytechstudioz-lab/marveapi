@@ -1,17 +1,28 @@
 import { Request, Response, NextFunction } from 'express';
 import User from '../models/User';
+import Notification from '../models/Notification';
 import ErrorResponse from '../utils/errorResponse';
 import asyncHandler from '../middleware/asyncHandler';
-import { uploadToS3 } from '../utils/s3';
+import { uploadToS3, processAndUploadBase64Image } from '../utils/s3';
+import { renderNotificationTemplate } from '../utils/templateService';
 import paginate from '../utils/paginate';
+import {
+    emitBusinessVerificationSubmitted,
+    emitUnapprovedCountUpdate,
+    emitNotificationToUser,
+    emitNotificationToAdmins,
+} from '../utils/socket';
 
 // @desc    Register user
 // @route   POST /api/v1/users
 // @access  Public
 export const createUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const { username, email, password } = req.body;
+    let { username, email, password } = req.body;
 
-    // Create user
+    if (!username && email) {
+        username = email.split('@')[0].toLowerCase() + Math.floor(1000 + Math.random() * 9000).toString();
+    }
+
     try {
         const user = await User.create({
             username,
@@ -41,19 +52,16 @@ export const createUser = asyncHandler(async (req: Request, res: Response, next:
 export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const { email, password } = req.body;
 
-    // Validate email & password
     if (!email || !password) {
         return next(new ErrorResponse('Please provide an email and password', 400));
     }
 
-    // Check for user
     const user = await User.findOne({ email }).select('+password');
 
     if (!user) {
         return next(new ErrorResponse('Invalid credentials', 401));
     }
 
-    // Check if password matches
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
@@ -67,36 +75,8 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
 // @route   PUT /api/v1/users/verify
 // @access  Private
 export const verifyUser = asyncHandler(async (req: any, res: Response, next: NextFunction) => {
-    let idCardUrl = req.body.idCard;
-    let passportUrl = req.body.passport;
-
-    // Check if idCard is a base64 string and upload to S3
-    if (req.body.idCard && req.body.idCard.startsWith('data:')) {
-        try {
-            const base64Data = req.body.idCard.split(',')[1];
-            const mimeType = req.body.idCard.split(';')[0].split(':')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
-            const fileName = `${req.user.username}-id-card.${mimeType.split('/')[1]}`;
-
-            idCardUrl = await uploadToS3(buffer, fileName, mimeType);
-        } catch (err: any) {
-            return next(new ErrorResponse(`Failed to process/upload ID image: ${err.message}`, 500));
-        }
-    }
-
-    // Check if passport is a base64 string and upload to S3
-    if (req.body.passport && req.body.passport.startsWith('data:')) {
-        try {
-            const base64Data = req.body.passport.split(',')[1];
-            const mimeType = req.body.passport.split(';')[0].split(':')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
-            const fileName = `${req.user.username}-passport.${mimeType.split('/')[1]}`;
-
-            passportUrl = await uploadToS3(buffer, fileName, mimeType);
-        } catch (err: any) {
-            return next(new ErrorResponse(`Failed to process/upload Face Passport image: ${err.message}`, 500));
-        }
-    }
+    const idCardUrl = await processAndUploadBase64Image(req.body.idCard, 'idcard', req.user.username);
+    const passportUrl = await processAndUploadBase64Image(req.body.passport, 'passport', req.user.username);
 
     const fieldsToUpdate = {
         firstName: req.body.firstName,
@@ -148,6 +128,21 @@ export const getUsers = asyncHandler(async (req: Request, res: Response, next: N
     res.status(200).json(results);
 });
 
+// @desc    Get count of unapproved business verification submissions
+// @route   GET /api/v1/users/unapproved-business-count
+// @access  Private/Admin-Staff
+export const getUnapprovedBusinessCount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const count = await User.countDocuments({
+        isBusinessVerifying: true,
+        isBusinessVerified: false,
+    });
+
+    res.status(200).json({
+        success: true,
+        count,
+    });
+});
+
 // @desc    Get single user
 // @route   GET /api/v1/users/:id
 // @access  Private/Admin-Staff
@@ -183,52 +178,172 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response,
     });
 });
 
+// @desc    Update single user by admin/staff (e.g. business verification approval/rejection)
+// @route   PUT /api/v1/users/:id
+// @access  Private/Admin-Staff
+export const updateUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const existingUser = await User.findById(req.params.id);
+    if (!existingUser) {
+        return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, {
+        new: true,
+        runValidators: true,
+    });
+
+    if (!updatedUser) {
+        return next(new ErrorResponse('Failed to update user', 500));
+    }
+
+    // Handle business verification status changes
+    if (req.body.isBusinessVerified !== undefined || req.body.isBusinessVerifying !== undefined) {
+        const unapprovedCount = await User.countDocuments({
+            isBusinessVerifying: true,
+            isBusinessVerified: false,
+        });
+
+        emitUnapprovedCountUpdate(unapprovedCount);
+
+        if (req.body.isBusinessVerified === true) {
+            const tpl = await renderNotificationTemplate('business_verification_approved', {
+                businessName: updatedUser.businessName || updatedUser.username,
+                username: updatedUser.username,
+            });
+            const userNotif = await Notification.create({
+                recipient: updatedUser._id,
+                title: tpl.title,
+                message: tpl.message,
+                type: tpl.type,
+                link: tpl.link,
+            });
+            emitNotificationToUser(updatedUser._id.toString(), userNotif);
+        } else if (req.body.isBusinessVerified === false) {
+            const tpl = await renderNotificationTemplate('business_verification_rejected', {
+                businessName: updatedUser.businessName || updatedUser.username,
+                username: updatedUser.username,
+                rejectionReason: req.body.rejectionReason || 'Verification details did not meet requirements.',
+            });
+            const userNotif = await Notification.create({
+                recipient: updatedUser._id,
+                title: tpl.title,
+                message: tpl.message,
+                type: tpl.type,
+                link: tpl.link,
+            });
+            emitNotificationToUser(updatedUser._id.toString(), userNotif);
+        }
+    }
+
+    res.status(200).json({
+        success: true,
+        data: updatedUser,
+    });
+});
+
 // @desc    Update user profile (Settings)
 // @route   PUT /api/v1/users/profile
 // @access  Private
 export const updateProfile = asyncHandler(async (req: any, res: Response, next: NextFunction) => {
-    let pictureUrl = req.body.picture;
+    const pictureUrl = await processAndUploadBase64Image(req.body.picture, 'profile', req.user.username);
+    const businessBannerUrl = await processAndUploadBase64Image(req.body.businessBanner, 'banner', req.user.username);
+    const cacDocumentUrl = await processAndUploadBase64Image(req.body.cacDocument, 'cac', req.user.username);
 
-    if (req.body.picture && req.body.picture.startsWith('data:')) {
-        try {
-            const base64Data = req.body.picture.split(',')[1];
-            const mimeType = req.body.picture.split(';')[0].split(':')[1];
-            const buffer = Buffer.from(base64Data, 'base64');
-            const fileName = `${req.user.username}-profile.${mimeType.split('/')[1]}`;
+    const currentUser = await User.findById(req.user.id);
+    if (!currentUser) {
+        return next(new ErrorResponse('User not found', 404));
+    }
 
-            pictureUrl = await uploadToS3(buffer, fileName, mimeType);
-        } catch (err: any) {
-            return next(new ErrorResponse(`Failed to process/upload profile picture: ${err.message}`, 500));
-        }
+    if (currentUser.isBusinessVerified) {
+        return next(new ErrorResponse('Your business profile is verified and locked from editing.', 400));
     }
 
     const fieldsToUpdate: any = {
         email: req.body.email,
         phone: req.body.phone,
     };
+
     if (req.body.accountType) fieldsToUpdate.accountType = req.body.accountType;
     if (req.body.merchantType !== undefined) fieldsToUpdate.merchantType = req.body.merchantType;
+    if (req.body.merchantSubCategories !== undefined) fieldsToUpdate.merchantSubCategories = req.body.merchantSubCategories;
     if (req.body.agentSpecialization !== undefined) fieldsToUpdate.agentSpecialization = req.body.agentSpecialization;
     if (req.body.isBusinessRegistered !== undefined) fieldsToUpdate.isBusinessRegistered = req.body.isBusinessRegistered;
     if (req.body.businessName !== undefined) fieldsToUpdate.businessName = req.body.businessName;
+    if (req.body.businessEmail !== undefined) fieldsToUpdate.businessEmail = req.body.businessEmail;
+    if (businessBannerUrl !== undefined) fieldsToUpdate.businessBanner = businessBannerUrl;
     if (req.body.officeAddress !== undefined) fieldsToUpdate.officeAddress = req.body.officeAddress;
-    if (req.body.cacDocument !== undefined) fieldsToUpdate.cacDocument = req.body.cacDocument;
+    if (cacDocumentUrl !== undefined) fieldsToUpdate.cacDocument = cacDocumentUrl;
     if (req.body.bankName !== undefined) fieldsToUpdate.bankName = req.body.bankName;
     if (req.body.accountName !== undefined) fieldsToUpdate.accountName = req.body.accountName;
     if (req.body.accountNumber !== undefined) fieldsToUpdate.accountNumber = req.body.accountNumber;
     if (req.body.coverageCountry !== undefined) fieldsToUpdate.coverageCountry = req.body.coverageCountry;
     if (req.body.coverageState !== undefined) fieldsToUpdate.coverageState = req.body.coverageState;
     if (req.body.coverageArea !== undefined) fieldsToUpdate.coverageArea = req.body.coverageArea;
+    if (req.body.coverageType !== undefined) fieldsToUpdate.coverageType = req.body.coverageType;
     if (req.body.bio !== undefined) fieldsToUpdate.bio = req.body.bio;
     if (req.body.website !== undefined) fieldsToUpdate.website = req.body.website;
 
     if (pictureUrl) fieldsToUpdate.picture = pictureUrl;
+
+    const newAccountType = req.body.accountType || currentUser.accountType;
+    const isBusinessAccount = newAccountType === 'Agent' || newAccountType === 'Merchant';
+    const isSubmittingBusiness = isBusinessAccount && (req.body.isBusinessRegistered || fieldsToUpdate.isBusinessRegistered || currentUser.isBusinessRegistered);
+
+    if (isSubmittingBusiness && !currentUser.isBusinessVerified) {
+        fieldsToUpdate.isBusinessVerifying = true;
+    }
 
     try {
         const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
             new: true,
             runValidators: true
         });
+
+        if (!user) {
+            return next(new ErrorResponse('Failed to update user', 500));
+        }
+
+        // If business verification was submitted, create notifications and emit socket events
+        if (isSubmittingBusiness && !currentUser.isBusinessVerifying && !currentUser.isBusinessVerified) {
+            // 1. Create notification for user
+            const userNotif = await Notification.create({
+                recipient: user._id,
+                title: 'Business Verification Under Review',
+                message: 'Your business profile is under review and will be processed as soon as possible.',
+                type: 'business_verification',
+                link: '/dashboard',
+            });
+            emitNotificationToUser(user._id.toString(), userNotif);
+
+            // 2. Find admins and create notifications for admins
+            const admins = await User.find({ role: { $in: ['admin', 'staff'] } });
+            const businessNameStr = user.businessName || user.username;
+
+            for (const admin of admins) {
+                const adminNotif = await Notification.create({
+                    recipient: admin._id,
+                    title: 'New Business Verification Submitted',
+                    message: `Business verification submitted by ${businessNameStr} (${user.accountType}).`,
+                    type: 'business_verification',
+                    link: '/team/businesses',
+                });
+                emitNotificationToAdmins(adminNotif);
+            }
+
+            // 3. Emit socket event for admin real-time sidebar & toast
+            const unapprovedCount = await User.countDocuments({
+                isBusinessVerifying: true,
+                isBusinessVerified: false,
+            });
+
+            emitBusinessVerificationSubmitted({
+                userId: user._id.toString(),
+                username: user.username,
+                businessName: user.businessName,
+                accountType: user.accountType,
+                unapprovedCount,
+            });
+        }
 
         res.status(200).json({
             success: true,
@@ -270,6 +385,7 @@ export const updatePassword = asyncHandler(async (req: any, res: Response, next:
         data: 'Password updated successfully'
     });
 });
+
 // @desc    Delete user account
 // @route   DELETE /api/v1/users/account
 // @access  Private
@@ -298,47 +414,58 @@ export const deleteAccount = asyncHandler(async (req: any, res: Response, next: 
     });
 });
 
-
 // Get token from model, create cookie and send response
 const sendTokenResponse = (user: any, statusCode: number, res: Response) => {
-    // Create token
     const token = user.getSignedJwtToken();
 
-    const options = {
-        expires: new Date(
-            Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
-        ),
-        httpOnly: true
-    };
-
-    res
-        .status(statusCode)
-        .json({
-            success: true,
-            token,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                picture: user.picture,
-                role: user.role,
-                firstName: user.firstName,
-                middleName: user.middleName,
-                lastName: user.lastName,
-                sex: user.sex,
-                phone: user.phone,
-                dateOfBirth: user.dateOfBirth,
-                address: user.address,
-                area: user.area,
-                state: user.state,
-                country: user.country,
-                idCard: user.idCard,
-                idName: user.idName,
-                passport: user.passport,
-                isVerified: user.isVerified,
-                nextOfKinName: user.nextOfKinName,
-                nextOfKinRelation: user.nextOfKinRelation,
-                nextOfKinPhone: user.nextOfKinPhone,
-            }
-        });
+    res.status(statusCode).json({
+        success: true,
+        token,
+        user: {
+            id: user._id,
+            username: user.username,
+            email: user.email,
+            picture: user.picture,
+            role: user.role,
+            accountType: user.accountType,
+            merchantType: user.merchantType,
+            merchantSubCategories: user.merchantSubCategories,
+            agentSpecialization: user.agentSpecialization,
+            isBusinessRegistered: user.isBusinessRegistered,
+            isBusinessVerifying: user.isBusinessVerifying,
+            isBusinessVerified: user.isBusinessVerified,
+            rejectionReason: user.rejectionReason,
+            businessName: user.businessName,
+            businessEmail: user.businessEmail,
+            businessBanner: user.businessBanner,
+            officeAddress: user.officeAddress,
+            cacDocument: user.cacDocument,
+            bankName: user.bankName,
+            accountName: user.accountName,
+            accountNumber: user.accountNumber,
+            coverageCountry: user.coverageCountry,
+            coverageState: user.coverageState,
+            coverageArea: user.coverageArea,
+            coverageType: user.coverageType,
+            firstName: user.firstName,
+            middleName: user.middleName,
+            lastName: user.lastName,
+            sex: user.sex,
+            phone: user.phone,
+            bio: user.bio,
+            website: user.website,
+            dateOfBirth: user.dateOfBirth,
+            address: user.address,
+            area: user.area,
+            state: user.state,
+            country: user.country,
+            idCard: user.idCard,
+            idName: user.idName,
+            passport: user.passport,
+            isVerified: user.isVerified,
+            nextOfKinName: user.nextOfKinName,
+            nextOfKinRelation: user.nextOfKinRelation,
+            nextOfKinPhone: user.nextOfKinPhone,
+        }
+    });
 };

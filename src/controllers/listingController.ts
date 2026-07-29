@@ -6,7 +6,7 @@ import User from '../models/User';
 import jwt from 'jsonwebtoken';
 import ErrorResponse from '../utils/errorResponse';
 import asyncHandler from '../middleware/asyncHandler';
-import { uploadToS3, deleteFromS3 } from '../utils/s3';
+import { uploadToS3, processAndUploadBase64Image, deleteFromS3 } from '../utils/s3';
 import paginate from '../utils/paginate';
 
 // @desc    Get all listings
@@ -89,25 +89,8 @@ export const createListing = asyncHandler(async (req: any, res: Response, next: 
     if (req.body.images && Array.isArray(req.body.images)) {
         const processedImages = [];
         for (const image of req.body.images) {
-            if (image.startsWith('data:')) {
-                try {
-                    const base64Data = image.split(',')[1];
-                    const mimeType = image.split(';')[0].split(':')[1];
-                    const buffer = Buffer.from(base64Data, 'base64');
-                    // Create unique filename
-                    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-                    const ext = mimeType.split('/')[1];
-                    const fileName = `listings/${req.user.username}-${uniqueSuffix}.${ext}`;
-
-                    const url = await uploadToS3(buffer, fileName, mimeType);
-                    processedImages.push(url);
-                } catch (err: any) {
-                    return next(new ErrorResponse(`Failed to upload image: ${err.message}`, 500));
-                }
-            } else {
-                // Assume it's already a URL if not base64
-                processedImages.push(image);
-            }
+            const url = await processAndUploadBase64Image(image, 'listing', req.user.username);
+            if (url) processedImages.push(url);
         }
         req.body.images = processedImages;
     }
